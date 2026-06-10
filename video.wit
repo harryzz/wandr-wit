@@ -1,5 +1,7 @@
-// DRAFT SKETCH (2026-06-08) — wandr:video: host-side hardware video codec for calls.
-// NOT YET IMPLEMENTED. See project_crypto_hw_offload (offload layer 2), task 93/95.
+// wandr:video — host-side hardware video codec for calls. (Drafted 2026-06-08;
+// host impl task 93 Phase 1 — encoder + decode-to-buffer; decode-to-surface /
+// arbiter Role::Video lands in Phase 4.) See project_crypto_hw_offload (offload
+// layer 2), task 93/95.
 //
 // WHY. A wasm guest cannot encode/decode VP8/VP9 in real time and can't reach the
 // hardware codec. This interface drives the device's HW MediaCodec (NDK AMediaCodec
@@ -24,11 +26,15 @@ package wandr:video@0.1.0;
 interface types {
     enum codec { vp8, vp9, h264, h265 }
 
+    /// Which camera feeds the encoder (a call self-view wants front).
+    enum camera-facing { front, back }
+
     enum video-error {
         unsupported-codec,
         no-hw-codec,         // only a software codec exists (e.g. VP9 encode here)
         codec-init-failed,
         bad-frame,
+        queue-full,          // decoder input queue full — frame dropped, resend after a keyframe
         surface-unavailable,
     }
 
@@ -52,10 +58,16 @@ interface types {
         /// true = camera frames captured host-side (the call self-view), the default.
         /// false (future) = guest supplies YUV (screen-share).
         source-camera: bool,
+        /// Which camera to capture from when source-camera (falls back to the
+        /// first camera if the requested facing doesn't exist).
+        facing: camera-facing,
     }
 
     record decoder-config {
         codec: codec,
+        /// Coded-size hint for codec init (from signaling); the stream's actual
+        /// size wins — VP8/VP9 keyframes carry their own dimensions.
+        width: u32, height: u32,
         rect: video-rect,    // initial geometry; resizable via set-rect
     }
 }
@@ -90,6 +102,9 @@ interface decoder {
         set-rect: func(rect: video-rect);
         /// true once >=1 keyframe has decoded (UI can drop the placeholder).
         ready: func() -> bool;
+        /// Frames decoded so far (diagnostics; Phase 1 decode-to-buffer counts
+        /// + drops them — Phase 4 composites instead).
+        decoded-frames: func() -> u64;
     }
 }
 
@@ -102,6 +117,12 @@ interface decoder {
 /// uses a rect to show the shape; wire it to the arbiter when building. Same question
 /// for the encoder self-view preview (composite host-side vs draw in the guest UI).
 world video-client {
+    import encoder;
+    import decoder;
+}
+
+/// Host-side import world the runtime `add_to_linker`s (the host implements all of it).
+world video-host {
     import encoder;
     import decoder;
 }
