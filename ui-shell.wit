@@ -36,7 +36,7 @@ interface locale {
     enum layout-direction { ltr, rtl }
     /// BCP-47 tag, e.g. "en-US"; "en-US" if unset.
     primary-locale: func() -> string;
-    is-24-hour-format: func() -> bool;
+    is-twenty-four-hour-format: func() -> bool;
     get-layout-direction: func() -> layout-direction;
 }
 
