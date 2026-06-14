@@ -1,4 +1,6 @@
-// wasi:audio — DRAFT (wandr, 2026-06-12). NOT WIRED.
+// wasi:audio — DRAFT (wandr, 2026-06-12). WIRED + device-verified
+// (task 108 M1, 2026-06-14): a pure-Rust guest decodes FLAC with Symphonia
+// and plays it through `playback` — audible on a Pixel 2 XL.
 //
 // PCM device I/O for WebAssembly components: the AUDIO slot of the WASI
 // Charter ("APIs for graphics, audio, input devices"), which the
@@ -16,11 +18,11 @@
 // decides/applies split the shipped contract proved: guest intends,
 // embedder decides, host applies.
 //
-// Named lanes (decided, not hidden): `playback.position` (frames played
-// — the A/V-sync master clock a wandr:media composition needs) = R2
-// additive method when that consumer ships; >2-channel layouts +
-// compressed-audio passthrough = R3 version events; device enumeration
-// = deliberately ABSENT (no ambient authority — the embedder routes).
+// Named lanes: `playback.position` (frames played — the seekbar/A-V-sync
+// master clock) PROMOTED 2026-06-14 (task 108, the player is the consumer);
+// >2-channel layouts + compressed-audio passthrough = R3 version events;
+// device enumeration = deliberately ABSENT (no ambient authority — the
+// embedder routes).
 package wasi:audio@0.0.1;
 
 interface pcm {
@@ -64,6 +66,13 @@ interface pcm {
         /// Frames written but not yet consumed by the device; 0 = a
         /// near-underrun cue (write more per call).
         buffered-frames: func() -> u32;
+
+        /// Total frames consumed by the device since `open` — the monotonic
+        /// playback clock (seekbar position + A/V-sync master). Derived as
+        /// frames-written − buffered-frames, so it advances at the device
+        /// rate and never exceeds what was written. Promoted 2026-06-14
+        /// (task 108); the player is the promoting consumer.
+        position: func() -> u64;
 
         start: func() -> result<_, audio-error>;
         /// Stops flow without dropping buffered frames; start resumes.
