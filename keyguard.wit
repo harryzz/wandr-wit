@@ -9,6 +9,21 @@ interface keyguard {
     /// The user performed the unlock gesture on the lock screen. The host forwards
     /// to the arbiter, which hides the keyguard + restores the foreground app.
     unlock: func();
+
+    // ── Power menu (task 110) ─────────────────────────────────────────────────
+    // The power-menu overlay guest calls these on a button tap; the host forwards
+    // each to the arbiter (which hides the menu + performs the action). Reuses
+    // this channel so no new host bindings / linker registration are needed.
+    /// Dismiss the power menu (tap-outside / back), restoring the app behind it.
+    pm-dismiss: func();
+    /// Dismiss the menu, then lock the device (the keyguard `lock` flow).
+    pm-lock: func();
+    /// Power off the device (`reboot -p`).
+    pm-power-off: func();
+    /// Restart the device (`reboot`).
+    pm-restart: func();
+    /// Emergency — a stub for now (the host/arbiter just logs + dismisses).
+    pm-emergency: func();
 }
 
 /// Host-import side — the host implements `keyguard` (forwards to the arbiter) and
