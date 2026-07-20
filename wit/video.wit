@@ -1,7 +1,9 @@
 // wandr:video — host-side hardware video codec for calls. (Drafted 2026-06-08;
-// host impl task 93 Phase 1 — encoder + decode-to-buffer; decode-to-surface /
-// arbiter Role::Video lands in Phase 4.) See project_crypto_hw_offload (offload
-// layer 2), task 93/95.
+// host impl task 93 Phase 1 — encoder + decode-to-buffer. Phase 4 SHIPPED
+// decode-to-surface, but as CHILD surfaces of the app's own surface, NOT the
+// arbiter `Role::Video` this header used to promise — see the design decision on
+// `world video-client` below, which is the authority.) See
+// project_crypto_hw_offload (offload layer 2), task 93/95.
 //
 // WHY. A wasm guest cannot encode/decode VP8/VP9 in real time and can't reach the
 // hardware codec. This interface drives the device's HW MediaCodec (NDK AMediaCodec

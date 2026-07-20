@@ -14,6 +14,17 @@
 // (set-rotation — a property of the FRAMES, the peer's CVO, not of
 // placement). Adoption trigger = the same as wasi:surface wiring; the
 // fused wandr:video keeps shipping unchanged until then (R3 coexistence).
+//
+// ‼️ OPEN — z-order changes OWNER in this factoring, not just location.
+// The shipped wandr:video says z-layer is "the guest owns this policy"
+// (wit/video.wit `z-layer`), because a call app decides whether remote video
+// sits behind its UI (transparent-hole/SurfaceView model) or above it. Moving z
+// to the surface makes it embedder-governed under request/configure — the guest
+// can then only REQUEST. That may well be right, but it is a behavioural change
+// for the shipped call path, and no migration note ever acknowledged it
+// (flagged by the media-contract audit, 2026-07-20). Resolve before wiring:
+// either keep a guest z-intent verb here, or state explicitly that the embedder
+// overrides and update wandr:video's guest-owns-policy wording to match.
 package wasi:video-decoder@0.0.1;
 
 interface types {
