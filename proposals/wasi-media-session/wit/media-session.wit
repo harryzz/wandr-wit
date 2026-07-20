@@ -1,4 +1,11 @@
-// wasi:media-session — DRAFT / SKETCH (wandr, 2026-06-14, task 108). NOT WIRED.
+// wasi:media-session — DRAFT (wandr, 2026-06-14, task 108). WIRED (task 108 M2).
+//
+// Host side: `runtime/wandr-host/src/media_session_host_impl.rs` implements
+// `session` and forwards to the arbiter's media-session module (lockscreen /
+// notification + headset MEDIA-BUTTON routing); linked onto every guest in
+// app_loader.rs. Guests exporting `session-handler` are probed with `.ok()` per
+// instance, so importing neither half stays harmless. Consumer:
+// `apps/user/wandr.audio.player` drives both directions.
 //
 // The now-playing / transport primitive. Aligned 1:1 to the W3C
 // **Media Session API** (`navigator.mediaSession`): `metadata`,
