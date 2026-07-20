@@ -1,8 +1,23 @@
-# wasi:media-source? — discussion notes (NOT a draft yet)
+# wasi:media-source? — CLOSED. No package. (discussion notes)
 
 > task 108, 2026-06-14. The W3C **Media Source Extensions** (MSE:
 > `MediaSource` / `SourceBuffer`) slot. Flagged as "needs additional talks"
 > — recorded as open questions, deliberately NOT sketched as WIT yet.
+>
+> **CLOSED 2026-07-20 (task 117 M2 scoping).** The provisional verdict below
+> is now the final one: **no `wasi:media-source` package will be created.**
+> Streaming is guest orchestration. This file is kept as the decision record —
+> do not turn it into a WIT sketch without re-opening the reasoning first.
+>
+> All four "needs talks" questions now have owners, so nothing is left
+> unassigned here:
+>
+> | # | Question | Owner |
+> |---|---|---|
+> | 1 | DRM in scope at all? | ✅ **ANSWERED** — `proposals/wasi-eme/`, ClearKey-only, Widevine deferred |
+> | 2 | Live / LL-HLS jitter buffer — host primitive or guest self-pacing? | 🔲 **STILL OPEN** — moved to task 117 M2's open list. Leaning "guest is enough", unproven; the M2 proving matrix (YouTube/adaptive) is what will settle it |
+> | 3 | True presentation timestamp for A/V-synced streaming | → **task 117 M2.** This file predicted it; M2 is the answer (opaque `decoded-frame` + `timestamp-us` + `present(at-ns)`) |
+> | 4 | Container/segment edge formats (fMP4/CMAF/HLS TS) | 🔲 guest-side; confirm during M2 that no codec needs HW-only init data we cannot pass through `decoder-config.description` |
 
 ## What MSE is, and why it's different from the other three
 
@@ -60,7 +75,7 @@ WIT sketch alongside the other three: most of it isn't a host capability.
    probably no host work; confirm no codec needs HW-only init data we can't
    pass through `audio-codec decoder-config.description`.
 
-## Provisional verdict (to confirm in the talks)
+## Verdict — FINAL (2026-07-20)
 
 No `wasi:media-source` package is needed: streaming is guest orchestration over
 `wasi:http`/`wasi:tls` + `wasi:audio-codec` + `wasi:audio`. The ONE thing MSE
@@ -70,3 +85,9 @@ host-side AES-CTR, portable, covers self-served / Signal-style encrypted media;
 Widevine deferred (TEE + Google-provisioned CDM, device-only) but reachable via
 the key-system string with no contract change. Everything else MSE implies is
 already covered by the floor + the codec lane.
+
+Item 3 above ("may surface a need for a true presentation timestamp") is the one
+prediction that came true: it did, and it is task 117 M2. Note that M2 answers it
+the way this file assumed — the guest pacing against
+`wasi:audio playback.position`, NOT a host-scheduled player. See
+`docs/wandr-media-scope.md`, which is retired for that reason.
