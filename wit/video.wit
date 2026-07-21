@@ -26,7 +26,11 @@
 package wandr:video@0.1.0;
 
 interface types {
-    enum codec { vp8, vp9, h264, h265 }
+    /// `av1` is PLAYBACK-only here (task 117 M2): the host decodes it in
+    /// software via dav1d (BSD-2) on desktop and MediaCodec on Android, and
+    /// never encodes it. APPENDED last on purpose — existing discriminants
+    /// (vp8=0…h265=3) are unchanged, so shipped call guests keep working.
+    enum codec { vp8, vp9, h264, h265, av1 }
 
     /// Which camera feeds the encoder (a call self-view wants front).
     enum camera-facing { front, back }
@@ -52,6 +56,24 @@ interface types {
         data: list<u8>,
         timestamp: u32,      // 90 kHz RTP timestamp
         keyframe: bool,      // true = IDR / VP8 key; decoders need one to start
+    }
+
+    /// One compressed frame for FILE PLAYBACK (task 117 M2) — the additive
+    /// sibling of `encoded-frame` above, which is RTP-shaped.
+    ///
+    /// The difference that matters: `timestamp-us` is a real PRESENTATION
+    /// timestamp in microseconds — the WebCodecs unit, matching
+    /// `wasi:audio-codec`'s `timestamp-us: s64` — not a 90 kHz transport clock
+    /// that wraps every ~13.25 h. Signed, because containers legitimately carry
+    /// negative PTS (encoder delay / edit lists).
+    ///
+    /// Decode order, not display order: a stream with B-frames is submitted in
+    /// the order it is stored, and the host emits `decoded-frame`s in DISPLAY
+    /// order. A submit may yield zero, one or several decoded frames.
+    record timed-frame {
+        data: list<u8>,
+        timestamp-us: s64,
+        keyframe: bool,
     }
 
     /// Where the host paints video, in the GUEST'S OWN surface pixels (the same
@@ -124,7 +146,43 @@ interface encoder {
 }
 
 interface decoder {
-    use types.{decoder-config, encoded-frame, video-rect, video-error};
+    use types.{decoder-config, encoded-frame, timed-frame, video-rect, video-error};
+
+    /// A frame the host has decoded and still holds (task 117 M2).
+    ///
+    /// OPAQUE BY DESIGN — pixels never cross the boundary; that is exactly what
+    /// keeps decode-to-surface zero-copy. The guest decides only *WHEN* a frame
+    /// is shown. *WHERE* it appears remains the surface's vocabulary
+    /// (`set-rect`/`set-visible` on the decoder today, one `connect(ctx)` once
+    /// this is factored into `wasi:video-decoder`) — so this resource stays on
+    /// the correct side of that split and factors without rework.
+    ///
+    /// This is the shape the hardware already exposes: Android
+    /// `MediaCodec.releaseOutputBuffer(index, renderTimestampNs)`, Apple
+    /// `AVSampleBufferDisplayLayer` (enqueue with a presentation time), and the
+    /// VA-API / Media Foundation equivalents. It gives WebCodecs' control flow
+    /// with `<video>`'s zero-copy, which neither W3C model provides alone.
+    ///
+    /// Dropping the resource without `present` or `discard` is equivalent to
+    /// `discard` — the buffer is released either way, never leaked.
+    resource decoded-frame {
+        /// The presentation timestamp carried through from `timed-frame`, in
+        /// DISPLAY order (the host reorders B-frames; a guest never has to).
+        timestamp-us: func() -> s64;
+
+        /// Schedule presentation at `at-ns` on the `wasi:clocks`
+        /// monotonic timeline — the clock a player converts into from
+        /// `wasi:audio` `playback.position()`, which is the only real media
+        /// clock in the system. That conversion is what makes A/V sync
+        /// possible: video is slaved to the audio master clock.
+        /// `0` = present as soon as possible.
+        present: func(at-ns: u64);
+
+        /// Release without showing it — arrived too late, or invalidated by a
+        /// seek. A player that falls behind discards rather than accumulating
+        /// latency.
+        discard: func();
+    }
 
     /// Opens a HW decoder + a compositing surface at `rect`. Decode-to-surface: the
     /// host decodes + paints directly; frames do not return to the guest.
@@ -144,6 +202,36 @@ interface decoder {
         /// Frames decoded so far (diagnostics; Phase 1 decode-to-buffer counts
         /// + drops them — Phase 4 composites instead).
         decoded-frames: func() -> u64;
+
+        // ── PLAYBACK (task 117 M2) — additive; everything above is the
+        // shipping, live-call-verified RTP path and is untouched. A guest uses
+        // one lane or the other, never both on the same decoder.
+
+        /// Push a frame carrying a real presentation timestamp.
+        ///
+        /// ‼️ `queue-full` means BACK-PRESSURE here, not loss: retry the SAME
+        /// frame once `next-decoded` has drained one. This inverts `submit`'s
+        /// RTP semantics ("frame dropped, resend after a keyframe"), which is
+        /// correct for a lossy transport and wrong for a file — a player cannot
+        /// resync on the next keyframe without visibly skipping.
+        submit-timed: func(frame: timed-frame) -> result<_, video-error>;
+
+        /// Take the next decoded frame in DISPLAY order, if one is ready
+        /// (non-blocking; `none` = not yet). Pair with `next-frame-delay` /
+        /// `on-frame` for pacing rather than spinning.
+        next-decoded: func() -> option<decoded-frame>;
+
+        /// End of stream: finish decoding everything queued so the tail of the
+        /// file is emitted via `next-decoded` (without this, the frames a codec
+        /// holds for reordering are never released). A keyframe is required to
+        /// resume decoding afterwards.
+        flush: func() -> result<_, video-error>;
+
+        /// Seek: discard queued input, held reference frames and any scheduled
+        /// presentations, and return to the pre-keyframe state. Cheaper and far
+        /// less disruptive than closing and reopening the decoder — which is
+        /// the only option this contract offered before.
+        reset: func() -> result<_, video-error>;
     }
 }
 
