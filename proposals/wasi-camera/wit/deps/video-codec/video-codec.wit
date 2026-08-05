@@ -14,18 +14,28 @@
 // `probe(config) -> support` (= isConfigSupported), identical `acceleration`, and the
 // same "use HW if present, fall back in-process when absent" capability negotiation.
 //
-// TWO DECODE LANES on one decoder (a guest uses one, never both):
-//   * RTP / call   — `submit(encoded-frame)`, 90 kHz transport ts; `queue-full` = LOSS
-//                    (resend after a keyframe). Live-call-verified (Signal).
-//   * PLAYBACK     — `submit-timed(timed-frame)`, real µs PTS; opaque `decoded-frame`s
-//                    the guest schedules via `present(at-ns)` on the wasi:clocks
-//                    monotonic timeline (video slaved to the wasi:audio master clock);
-//                    `queue-full` = BACK-PRESSURE. Production-verified: jellyfin + dash.
+// ONE decode path (`submit(chunk)`), TWO presentation modes — chosen by whether the
+// guest PULLS output, not by a second submit verb or a second chunk type:
+//   * AUTO / real-time — submit and DON'T pull; the host presents each decoded frame
+//                        ASAP to the connected surface (RTP calls; no per-frame guest
+//                        work). The guest treats `queue-full` as LOSS (resend after a
+//                        keyframe).
+//   * GUEST-TIMED      — submit, then `next-decoded` -> `decoded-frame` -> `present(at-ns)`
+//                        on the wasi:clocks monotonic timeline (video slaved to the
+//                        wasi:audio master clock, A/V sync — file playback). `queue-full`
+//                        = BACK-PRESSURE (retry the same chunk).
+// One `encoded-chunk` (µs PTS) feeds both; an RTP guest converts its 90 kHz clock to µs.
+// Live-verified: Signal calls; jellyfin + dash playback.
 //
-// Factored OUT (surface's job): placement — `set-rect`/`set-visible`/z-layer — lives in
-// wasi:surface (request/configure). Content orientation stays here (`set-rotation`,
-// `frame.rotation` — a property of the FRAMES). The camera SOURCE is wasi:camera (W3C
-// Media Capture vs WebCodecs); it PRODUCES `frame`, this encoder CONSUMES it.
+// Factored OUT (surface's job): placement AND sizing — `set-rect`/`set-visible`/
+// z-layer, and the aspect-fit/letterbox — live in wasi:surface (request/configure).
+// The GUEST sizes the video surface to the content aspect (it knows the surface size
+// and, from demux, the display aspect), so there is NO host letterbox to report and no
+// `presented-rect`: the guest that owns the fit already knows where the picture is, and
+// draws subtitles/controls against its own layout. Content ORIENTATION stays here
+// (`set-rotation`, `frame.rotation` — a property of the FRAMES). The camera SOURCE is
+// wasi:camera (W3C Media Capture vs WebCodecs); it PRODUCES `frame`, this encoder
+// CONSUMES it.
 //
 // Deps (wit/deps/): wasi:graphics-context (the decode-to-surface socket) + wasi:eme
 // (decrypt-config on the frame + the key-session bound at decoder open).
@@ -65,51 +75,62 @@ interface types {
         surface-unavailable,
     }
 
-    /// One decoder implementation the host can offer for a codec (diagnostic; choose
-    /// on `hardware`, not the per-platform `name`).
-    record decoder-info {
-        codec: codec,
-        name: string,
-        hardware: bool,
-    }
 
-    /// A sub-rectangle of the connected surface, in SURFACE pixels — the RESULT of
-    /// `presented-rect` (where the aspect-corrected picture landed after letterbox/
-    /// pillarbox). Distinct from surface PLACEMENT geometry (wasi:surface's request/
-    /// configure): this is a decode-fill result the producer computes.
-    record content-rect { x: u32, y: u32, width: u32, height: u32 }
 
     /// ENCRYPTED MEDIA (task 108): `decrypt` carries per-frame Common-Encryption params
     /// (= WebCodecs decryptConfig, owned by wasi:eme); the key comes from a wasi:eme
     /// key-session bound at decoder open. Additive; cleartext when `decrypt` = none.
     use wasi:eme/eme@0.0.1.{decrypt-config};
 
-    /// One compressed frame for the RTP / call lane (reassembled after SRTP-open).
-    record encoded-frame {
+    /// One compressed frame (= WebCodecs `EncodedVideoChunk`; the audio sibling's
+    /// `encoded-chunk`). ONE record for BOTH lanes — RTP/call and file/playback differ
+    /// only in how the guest reads output back and reacts to `queue-full`, not in the
+    /// input shape.
+    ///
+    /// `timestamp-us` is a real µs PRESENTATION timestamp (WebCodecs unit, matching
+    /// wasi:audio-codec's s64), signed (containers carry negative PTS from edit lists /
+    /// encoder delay). An RTP/call guest converts its 90 kHz transport timestamp to µs
+    /// (× 100/9) before submitting — it already owns the RTP layer. Decode order in; the
+    /// host emits DISPLAY order (it reorders B-frames).
+    ///
+    /// `decrypt`: none = cleartext (RTP calls are SRTP-opened at the transport, so it is
+    /// none there); some = encrypted file, decrypted host-side via the bound key-session.
+    record encoded-chunk {
+        /// The compressed bytes of exactly one frame (Annex-B NAL units for H.264/265,
+        /// a VP8/VP9 frame) — reassembled by the guest from RTP, or read from a demuxed
+        /// container.
         data: list<u8>,
-        /// 90 kHz media timestamp (the RTP transport clock).
-        timestamp: u32,
+        /// Presentation timestamp, microseconds (see the record doc above).
+        timestamp-us: s64,
+        /// KEYFRAME (= WebCodecs `EncodedVideoChunk.type` "key" vs "delta"):
+        /// true  = INTRA-coded — a complete, self-decodable picture (an H.264/H.265
+        ///         IDR, a VP8/VP9 key frame). The only valid place to START or RESUME
+        ///         decoding: a decoder must open on one, a seek jumps to the nearest
+        ///         one, and `flush`/`reset` require one to resume.
+        /// false = a DELTA / inter-coded frame (P/B): encoded as a difference from
+        ///         earlier (or, with B-frames, later) frames, meaningless until its
+        ///         reference frames have decoded.
+        /// Carried explicitly, not inferred from the bitstream, so the host and guest
+        /// act on it WITHOUT parsing the codec: the decoder rejects a stream that opens
+        /// on a delta; an RTP receiver that lost packets requests a keyframe (RTCP
+        /// PLI/FIR) and drops deltas until one arrives.
         keyframe: bool,
+        /// Per-frame Common-Encryption params for encrypted media (see the record doc);
+        /// none = cleartext.
         decrypt: option<decrypt-config>,
     }
 
-    /// One compressed frame for the PLAYBACK lane. `timestamp-us` is a real µs
-    /// presentation timestamp (WebCodecs unit, matches wasi:audio-codec s64), not a
-    /// wrapping 90 kHz transport clock. Signed (containers carry negative PTS). Decode
-    /// order in, DISPLAY order out (the host reorders B-frames).
-    record timed-frame {
-        data: list<u8>,
-        timestamp-us: s64,
-        keyframe: bool,
-    }
-
-    /// WebCodecs `VideoDecoderConfig` (subset).
+    /// WebCodecs `VideoDecoderConfig` (subset). No `width`/`height`: they were a hint
+    /// the codec overrides ("the stream's actual size wins" — VP8/VP9 keyframes and the
+    /// in-band H.26x SPS carry dimensions), and the guest already has the size from
+    /// demux, so a decoder never needs them at init.
     record decoder-config {
         codec: codec,
-        /// Coded-size hint for init; the stream's actual size wins where the codec
-        /// carries dimensions.
-        width: u32,
-        height: u32,
+        /// HW/SW preference (= WebCodecs `hardwareAcceleration`). IN the config — not a
+        /// separate `open-accelerated` verb — same shape as wasi:audio-codec's
+        /// `decoder-config`. A guest that doesn't care sets `no-preference` and gets the
+        /// host default (hardware first, software fallback).
+        acceleration: acceleration,
     }
 
     /// WebCodecs `VideoEncoderConfig` (subset): the OUTPUT coded size + rate. Input
@@ -120,6 +141,11 @@ interface types {
         height: u32,
         bitrate-bps: u32,
         framerate: u32,
+        /// HW/SW preference (= WebCodecs `hardwareAcceleration`) — same as
+        /// `decoder-config` and wasi:audio-codec's `encoder-config`. `no-preference` =
+        /// host default (hardware first — a call encoder wants HW for battery; software
+        /// fallback where a HW encoder is absent, e.g. VP9 encode on many SoCs).
+        acceleration: acceleration,
     }
 
     /// The shared raw video frame — OPAQUE, host-held (= WebCodecs VideoFrame). The
@@ -140,28 +166,28 @@ interface types {
         /// (host converts + copies); `none` if the host cannot convert. The zero-copy
         /// paths never call it.
         read-rgba: func() -> option<list<u8>>;
+        // Dropping the resource releases the host-held pixels (== WebCodecs
+        // VideoFrame.close()); a forwarded frame is consumed by encode/present.
     }
 }
 
 interface decoder {
-    use types.{codec, decoder-config, encoded-frame, timed-frame, acceleration,
-               support, decoder-info, content-rect, codec-error};
+    use types.{codec, decoder-config, encoded-chunk, support, codec-error};
     use wasi:graphics-context/graphics-context@0.0.2.{context};
     use wasi:eme/eme@0.0.1.{key-session};
 
-    /// Enumerate the whole decoder table (the navigator.mediaCapabilities /
-    /// diagnostics role — PROBED, not declared: an empty entry means "not decodable
-    /// here"). For "can I play THIS config, on which lane" use `probe`.
-    list-decoders: func() -> list<decoder-info>;
-
-    /// = WebCodecs VideoDecoder.isConfigSupported — the faithful per-config probe.
+    /// = WebCodecs VideoDecoder.isConfigSupported — the faithful per-config probe, and
+    /// the ONLY capability call a real guest needs. (Enumerating the whole decoder table
+    /// and querying which impl an open decoder got are diagnostics/testing — see
+    /// wandr:video-diag, deliberately out of this standard.)
     probe: func(config: decoder-config) -> support;
 
-    /// A decoded frame the host holds (PLAYBACK lane) — OPAQUE, pixels never cross;
-    /// the guest decides only WHEN it shows. (Distinct from `frame`: this carries
-    /// DISPLAY scheduling. Drop == discard, never leaked.)
+    /// A decoded frame the host holds — OPAQUE, pixels never cross; the guest decides
+    /// only WHEN it shows. Pulled via `next-decoded` when a guest takes timing control.
+    /// (Distinct from `frame`: this carries DISPLAY scheduling. Drop == discard, never
+    /// leaked.)
     resource decoded-frame {
-        /// PTS carried from `timed-frame`, in DISPLAY order.
+        /// PTS carried from the `encoded-chunk`, in DISPLAY order.
         timestamp-us: func() -> s64;
         /// Schedule presentation at `at-ns` on the wasi:clocks monotonic timeline
         /// (converted from wasi:audio `playback.position()` — video slaved to the
@@ -172,16 +198,11 @@ interface decoder {
     }
 
     resource video-decoder {
-        /// Open a HW/SW decoder. `keys` binds a wasi:eme key-session for an encrypted
-        /// stream (none = cleartext). Default policy: hardware first, software fallback.
+        /// Open a HW/SW decoder. `config.acceleration` sets the HW/SW preference (=
+        /// WebCodecs hardwareAcceleration); `keys` binds a wasi:eme key-session for an
+        /// encrypted stream (none = cleartext).
         open: static func(config: decoder-config,
                           keys: option<borrow<key-session>>)
-              -> result<video-decoder, codec-error>;
-        /// `open` with an explicit HW/SW preference (additive; `open`/`decoder-config`
-        /// unchanged so shipped consumers keep their ABI).
-        open-accelerated: static func(config: decoder-config,
-                                      keys: option<borrow<key-session>>,
-                                      accel: acceleration)
               -> result<video-decoder, codec-error>;
 
         /// Claim the surface socket: decoded output composites into the connected
@@ -190,32 +211,40 @@ interface decoder {
         /// Connect BEFORE the first submit; earlier frames MAY be dropped.
         connect: func(ctx: borrow<context>) -> result<_, codec-error>;
 
-        // ── RTP / call lane ──
-        /// Push one compressed frame (after SRTP-open + RTP depacketize).
-        submit: func(frame: encoded-frame) -> result<_, codec-error>;
-        /// Content-orientation correction, degrees CW (the peer's CVO) — at
-        /// composition, no codec reconfigure; live-updatable mid-call.
-        set-rotation: func(degrees: u32);
-        /// Where the aspect-corrected picture landed inside the connected surface, in
-        /// surface pixels — `none` until the first frame composites. For subtitles /
-        /// controls over the picture and in the black bars (drawn in the guest's UI
-        /// layer; pixels never cross). Stays on the decoder: the letterbox is the
-        /// producer's decision, and a general surface must not carry media-fit.
-        presented-rect: func() -> option<content-rect>;
-        /// true once >=1 keyframe decoded (drop the placeholder).
-        ready: func() -> bool;
-        /// Frames decoded so far (diagnostics).
-        decoded-frames: func() -> u64;
-        /// Which implementation this decoder actually got (acceleration is a
-        /// preference; a silent HW->SW fallback would otherwise be invisible).
-        implementation: func() -> decoder-info;
+        /// Push one compressed frame (= WebCodecs VideoDecoder.decode(chunk)). Decode
+        /// order in; the host reorders B-frames and emits DISPLAY order. `queue-full`
+        /// means the input queue is full — the RESPONSE is the guest's policy: a
+        /// real-time RTP guest DROPS it and resends after a keyframe (loss-tolerant); a
+        /// file player treats it as BACK-PRESSURE and retries the SAME chunk once
+        /// `next-decoded` has drained one (a file cannot skip to a keyframe cleanly).
+        submit: func(chunk: encoded-chunk) -> result<_, codec-error>;
 
-        // ── PLAYBACK lane (additive) ──
-        /// Push a frame with a real PTS. `queue-full` = BACK-PRESSURE (retry the SAME
-        /// frame once `next-decoded` drains one), NOT loss.
-        submit-timed: func(frame: timed-frame) -> result<_, codec-error>;
-        /// Take the next decoded frame in DISPLAY order if ready (non-blocking).
+        /// Take the next decoded frame in DISPLAY order, if ready (non-blocking; `none`
+        /// = not yet). OPTIONAL — this is how a guest takes TIMING CONTROL: pull the
+        /// frame and `present(at-ns)` it (A/V sync against the wasi:audio master clock;
+        /// file playback). If a guest NEVER pulls, the host presents each decoded frame
+        /// ASAP to the connected surface (real-time calls — no per-frame guest work).
+        /// One mode or the other, not a mix.
+        ///
+        /// POLL, not pollable: this returns `option` for the frame-paced reactor model
+        /// (the embedder's on-frame tick is the wakeup; the host's `present(at-ns)` does
+        /// the precise timing, so a guest never spins). A `wasi:io/poll` pollable for a
+        /// self-scheduling PULL-profile guest is a deliberate additive deferral — the
+        /// same push/pull split wasi:surface draws — added if such a consumer ships.
         next-decoded: func() -> option<decoded-frame>;
+
+        /// Content-orientation correction, degrees CW (the peer's CVO) — at composition,
+        /// no codec reconfigure; live-updatable mid-call.
+        set-rotation: func(degrees: u32);
+        /// true once >=1 keyframe has decoded and composited — the signal to drop a
+        /// "connecting…" placeholder. Genuinely host-only in the AUTO-present/call path
+        /// (the guest never pulls `next-decoded` there, so it cannot otherwise know when
+        /// video first appears). NOTE: probably UNNECESSARY — redundant in the
+        /// guest-timed path (where `next-decoded` returning a frame is the same signal),
+        /// and a guest content to show a black surface until frames arrive needs it not.
+        /// Kept only for the placeholder-UX signal; a candidate to drop. Diagnostics
+        /// (`decoded-frames`, `implementation`, `list-decoders`) live in wandr:video-diag.
+        ready: func() -> bool;
         /// End of stream: flush the reorder buffer out via `next-decoded` (a keyframe
         /// is required to resume).
         flush: func() -> result<_, codec-error>;
@@ -226,7 +255,7 @@ interface decoder {
 }
 
 interface encoder {
-    use types.{codec, encoder-config, encoded-frame, support, codec-error, frame};
+    use types.{codec, encoder-config, encoded-chunk, support, codec-error, frame};
 
     /// = WebCodecs VideoEncoder.isConfigSupported. (av1 -> `unsupported`: decode-only.)
     probe: func(config: encoder-config) -> support;
@@ -242,9 +271,9 @@ interface encoder {
         /// travels with the frame; the encoder does not interpret it.
         encode: func(frame: borrow<frame>) -> result<_, codec-error>;
 
-        /// Pull the next compressed frame; none = not ready yet. The guest RTP-
-        /// packetizes + SRTP-seals + sends.
-        next-frame: func() -> option<encoded-frame>;
+        /// Pull the next compressed chunk (= the EncodedVideoChunk output); none = not
+        /// ready yet. The guest RTP-packetizes + SRTP-seals + sends.
+        next-chunk: func() -> option<encoded-chunk>;
 
         /// Force a keyframe (on the receiver's RTCP PLI/FIR).
         request-keyframe: func();
