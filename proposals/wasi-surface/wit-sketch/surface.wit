@@ -1,13 +1,23 @@
 // UPSTREAM-OWNED PACKAGE (wasi-gfx org) — this is wandr's PROPOSED
 // CHANGE-SET as a validatable sketch (capability-granted context via
 // surface.get-context, request/configure geometry, configure-with-scale,
-// optional pull-profile events), NOT a wandr package and claiming no
-// version lineage (DESIGN.md §ownership). Ship-before-upstream fallback
-// = wandr:surface@0.0.1. Validation: `wasm-tools component wit .`
+// optional pull-profile events, advisory ui-relationship), NOT a wandr
+// package and claiming no version lineage (DESIGN.md §ownership).
+// Ship-before-upstream fallback = wandr:surface@0.0.1.
+// Validation: `wasm-tools component wit .`
 package wasi:surface@0.0.2;
 
 interface surface {
     use wasi:graphics-context/graphics-context@0.0.2.{context};
+
+    /// A media/child surface's advisory stacking relationship to the
+    /// embedder's OWN UI layer — the factored home of wandr:video's
+    /// guest-owned `z-layer`. `behind-ui` = the embedder's UI may draw OVER
+    /// this surface (transparent-hole / SurfaceView model — e.g. video with
+    /// controls on top); `above-ui` = this surface covers its rect and the UI
+    /// lays out around it. It is a CONTENT intent about this surface's relation
+    /// to its own UI, NOT global stacking (which stays composition authority).
+    enum ui-relationship { behind-ui, above-ui }
 
     /// Authoritative geometry (xdg_shell model: clients REQUEST,
     /// compositors CONFIGURE). Delivered via the embedder's event
@@ -31,6 +41,13 @@ interface surface {
         /// Advisory; the embedder MAY ignore it. Authoritative size
         /// always arrives as a configure.
         request-set-size: func(width: option<u32>, height: option<u32>);
+        /// Advisory content-relationship of THIS surface to the embedder's own
+        /// UI layer (see `ui-relationship`). Advisory — the embedder MAY ignore
+        /// it (global stacking is composition authority, never a guest call);
+        /// the guest only expresses intent. This is where wandr:video's
+        /// guest-owned `z-layer` factors to: the guest REQUESTS, the embedder
+        /// CONFIGURES. Same request/configure discipline as `request-set-size`.
+        request-ui-relationship: func(rel: ui-relationship);
         /// The surface's swapchain socket — one per surface, stable.
         get-context: func() -> context;
     }

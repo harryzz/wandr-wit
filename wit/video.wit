@@ -35,11 +35,20 @@ interface types {
     /// Which camera feeds the encoder (a call self-view wants front).
     enum camera-facing { front, back }
 
-    /// Where a video surface composites relative to the app's own UI buffer
-    /// (the guest owns this policy). `behind-ui` = the SurfaceView model: the
-    /// UI punches a transparent hole and may draw controls OVER the video
-    /// (host clears the layer's opaque flag while video is up). `above-ui` =
-    /// video covers the rect; the UI lays out around it — no hole needed.
+    /// Where a video surface composites relative to the app's own UI buffer.
+    /// `behind-ui` = the SurfaceView model: the UI punches a transparent hole and
+    /// may draw controls OVER the video (host clears the layer's opaque flag while
+    /// video is up). `above-ui` = video covers the rect; the UI lays out around it —
+    /// no hole needed.
+    ///
+    /// OWNERSHIP (migration note, task 120): in THIS fused contract the guest CHOOSES
+    /// and the host honors it — the shipped call path relies on that. In the FACTORED
+    /// wasi:surface world this becomes an EMBEDDER-GOVERNED REQUEST: the guest
+    /// REQUESTS behind/above (advisory `request-ui-relationship` on wasi:surface, a
+    /// wasi-gfx change-set) and the embedder configures actual stacking — global z is
+    /// composition authority a guest cannot hold. The VALUE the guest expresses is
+    /// unchanged; only the AUTHORITY moves. (Recorded because no earlier migration
+    /// note acknowledged this owner change — flagged by the media-contract audit.)
     enum z-layer { behind-ui, above-ui }
 
     enum video-error {
