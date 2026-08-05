@@ -1,0 +1,17 @@
+// wandr:audio-diag — DRAFT. NOT WIRED.
+//
+// Diagnostics / TEST surface for wasi:audio-codec — the mirror of wandr:video-diag,
+// deliberately OUTSIDE the standard. A real guest counts its own `read` output frames
+// and needs nothing here; this wandr:* package exists for testing/telemetry so the
+// standard wasi:audio-codec stays necessary-and-sufficient.
+package wandr:audio-diag@0.1.0;
+
+interface diag {
+    use wasi:audio-codec/decoder@0.0.1.{audio-decoder};
+
+    /// Frames an open decoder has decoded so far (diagnostics / telemetry). A real
+    /// guest that wants a count sums its own `read` buffer lengths.
+    decoded-frames: func(dec: borrow<audio-decoder>) -> u64;
+}
+
+world audio-diag { import diag; }

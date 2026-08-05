@@ -48,11 +48,14 @@ interface types {
     /// Discriminants stable: vp8=0…av1=4.
     enum codec { vp8, vp9, h264, h265, av1 }
 
-    /// WebCodecs `hardwareAcceleration` preference. IDENTICAL to wasi:audio-codec's
-    /// `acceleration` so a guest's HW/SW fallback is uniform across the A/V pair.
-    /// `prefer-*` are hints (the host falls back); `require-hardware` is the honest
-    /// fail-rather-than-pay-CPU opt-out (software VIDEO decode costs real CPU at frame
-    /// rate) and the ONLY value that turns a working decode into an error.
+    /// HW/SW preference. The first three map to WebCodecs `hardwareAcceleration`
+    /// (`no-preference`/`prefer-hardware`/`prefer-software`); `require-hardware` is a
+    /// wandr EXTENSION (NOT a WebCodecs value) — the honest fail-rather-than-pay-CPU
+    /// opt-out (software VIDEO decode costs real CPU at frame rate) and the ONLY value
+    /// that turns a working decode into an error. SHARED VOCABULARY kept byte-IDENTICAL
+    /// with wasi:audio-codec's `acceleration` (candidate to hoist into a common
+    /// wasi:media-types once a THIRD consumer appears). ABI-positional: no-preference=0…
+    /// require-hardware=3; APPEND only.
     enum acceleration { no-preference, prefer-hardware, prefer-software, require-hardware }
 
     /// `probe` result (= WebCodecs isConfigSupported, explicit about the LANE so the
