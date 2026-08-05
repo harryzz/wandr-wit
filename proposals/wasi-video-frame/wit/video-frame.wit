@@ -1,0 +1,39 @@
+// wasi:video-frame — DRAFT (wandr). NOT WIRED.
+//
+// The shared, opaque, host-held RAW video frame — the WebCodecs `VideoFrame`. It is
+// the currency between a SOURCE (wasi:camera; later wasi:canvas / screen-share) and a
+// SINK (wasi:video-encoder), plus the explicit pixels-to-guest escape hatch. Pixels
+// stay host-side; forwarding the handle source->sink is zero-copy. Hoisted into its
+// own package the moment a SECOND consumer appeared (the encoder joined the camera) so
+// a codec does not depend on a specific capture source — exactly as WebCodecs makes
+// VideoFrame source-agnostic (a decoder outputs one, a canvas/camera makes one, an
+// encoder consumes one).
+//
+// NOT the same as wasi:video-decoder's `decoded-frame`: that carries DISPLAY
+// scheduling (`present(at-ns)`/`discard` on the wasi:clocks timeline) because decode
+// output is slaved to the audio master clock. This `frame` is a raw INPUT frame with
+// no display verbs. WebCodecs uses one VideoFrame for both; wandr splits the
+// display-scheduling concern out, so the two stay distinct until/unless they converge.
+package wasi:video-frame@0.0.1;
+
+interface types {
+    resource frame {
+        /// Presentation timestamp, microseconds (the WebCodecs s64 unit — one media
+        /// clock across camera / encoder / decoder / audio-codec).
+        timestamp-us: func() -> s64;
+        width: func() -> u32;
+        height: func() -> u32;
+        /// Content orientation: degrees CW for upright display — a source's CVO (e.g.
+        /// the facing-adjusted camera sensor orientation). A sink applies or forwards
+        /// it; it is a property of the FRAME, not of any placement.
+        rotation: func() -> u32;
+        /// Copy into guest memory as tightly-packed RGBA8 (width*height*4). EXPENSIVE
+        /// (the host converts + copies across the boundary); `none` if the host cannot
+        /// convert. The zero-copy source->sink paths never call it — this is the
+        /// explicit opt-out for a guest that genuinely needs the pixels (ML, software
+        /// encode). Dropping the resource releases the frame.
+        read-rgba: func() -> option<list<u8>>;
+    }
+}
+
+world video-frame { import types; }

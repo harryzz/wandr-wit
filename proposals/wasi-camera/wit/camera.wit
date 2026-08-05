@@ -1,0 +1,132 @@
+// wasi:camera — DRAFT (wandr). NOT WIRED.
+//
+// The camera SOURCE, factored out of wasi:video-encoder. The web platform already
+// draws this line — capture and codec are SEPARATE specs — and wandr mirrors it:
+//   * wasi:camera         == W3C **Media Capture and Streams** (getUserMedia /
+//                            MediaStreamTrack; `facing` == `facingMode`) + **Image
+//                            Capture** (torch/zoom/still) [W3C WebRTC WG].
+//   * wasi:video-encoder  == WebCodecs **VideoEncoder** (codec; camera-agnostic).
+//   * the bridge          == W3C **MediaStreamTrack Insertable Streams**
+//                            (`MediaStreamTrackProcessor` -> VideoFrame): a camera
+//                            `frame` is the opaque currency an encoder consumes.
+// So the web pipeline getUserMedia -> track-processor -> VideoEncoder is exactly
+// wasi:camera -> wasi:video-encoder here. No wasi:camera proposal exists upstream at
+// any phase — this is a greenfield draft derived from the W3C family (the
+// wasi:canvas / wasi:audio playbook).
+//
+// ZERO-COPY IS THE DEFAULT. A `frame` is an OPAQUE, host-held handle (= WebCodecs
+// VideoFrame): pixels stay host-side and the handle is forwarded — to a video-encoder
+// (HW encode) or to a surface (the viewfinder) — without crossing the sandbox.
+// `frame.read-rgba` is the EXPENSIVE opt-out for a guest that genuinely needs the
+// pixels (ML, software encode, screen-share-style processing) — most never call it.
+//
+// GRAPHICS-CONTEXT PRODUCER (the "fifth type", proposals/wasi-surface/DESIGN.md): the
+// live viewfinder composites into a connected surface's buffers via
+// `connect-preview(ctx)` — host-fill, claim-not-pump, placement/z/visibility are the
+// SURFACE's contract. The camera device ITSELF is not surface-related; only its
+// preview is.
+//
+// A `frame` shared with wasi:video-decoder's `decoded-frame` (both are opaque
+// host-held VideoFrames) is a candidate to hoist into a common wasi:media-types /
+// wasi:video-frame package later; kept local here until a second consumer needs it.
+package wasi:camera@0.0.1;
+
+interface types {
+    /// Which way the camera points. = MediaTrackConstraints `facingMode`
+    /// (user/environment) + `external` for a plugged-in webcam. `open(facing, …)`
+    /// picks the nearest device; the granted device's facing is reported back.
+    enum facing { front, back, external }
+
+    /// A camera the host can offer right now (PROBED, not declared — an unplugged or
+    /// unpermitted device is simply absent). = a videoinput `MediaDeviceInfo`.
+    record camera-info {
+        /// Opaque, stable device id (host-scoped; not a compatibility promise). Feed
+        /// it to `open-device`.
+        device-id: string,
+        facing: facing,
+        /// Human label for a picker (diagnostic only).
+        name: string,
+    }
+
+    /// Requested capture format (a MediaTrackConstraints subset). Nearest-match: the
+    /// GRANTED format may differ (a sensor has fixed modes) and is reported by the
+    /// opened camera's `format`.
+    record format {
+        width: u32,
+        height: u32,
+        framerate: u32,
+    }
+
+    enum camera-error {
+        /// No camera matches (facing/device absent, or none present at all).
+        no-camera,
+        /// The host/embedder denies access (= a rejected getUserMedia). Camera access
+        /// is the host's policy to enforce; the WIT never grants ambient authority.
+        permission-denied,
+        /// The requested format has no acceptable near-match.
+        unsupported-format,
+        /// Another owner holds the device.
+        in-use,
+        /// The device went away mid-capture (unplugged / revoked).
+        device-lost,
+    }
+}
+
+interface camera {
+    use types.{facing, camera-info, format, camera-error};
+    use wasi:video-frame/types@0.0.1.{frame};
+    use wasi:graphics-context/graphics-context@0.0.2.{context};
+
+    /// Cameras available to THIS guest right now (= MediaDevices.enumerateDevices
+    /// filtered to videoinput). Empty = none present or none permitted — the only
+    /// answer a guest can act on. Labels/ids may be withheld until access is granted
+    /// (the getUserMedia privacy rule); the host decides.
+    list-cameras: func() -> list<camera-info>;
+
+    // Captured frames are the SHARED wasi:video-frame `frame` (= WebCodecs VideoFrame):
+    // opaque + host-held, forwarded zero-copy to a video-encoder or the viewfinder, or
+    // `read-rgba`'d for the pixels-needed path. `frame.rotation` carries the facing-
+    // adjusted sensor CVO (the encoder's old `display-rotation`, now a source property).
+
+    /// An open capture device. One owner; dropping it releases the camera (the
+    /// cameraserver-wedge rule — ordered teardown is the host's).
+    resource camera {
+        /// Open the nearest camera for `facing` at a requested format. `permission-
+        /// denied` if the host refuses. The granted format may differ — query it.
+        open: static func(facing: facing, want: format)
+              -> result<camera, camera-error>;
+        /// Open a specific enumerated device (`camera-info.device-id`).
+        open-device: static func(device-id: string, want: format)
+              -> result<camera, camera-error>;
+
+        /// The format actually granted (may differ from the request).
+        format: func() -> format;
+        /// The facing actually granted.
+        facing: func() -> facing;
+
+        /// Pull the next captured frame (non-blocking; `none` = not ready yet). Pace
+        /// against the embedder's frame cadence rather than spinning. The frame is
+        /// opaque + host-held — see `frame`.
+        next-frame: func() -> option<frame>;
+
+        /// VIEWFINDER: composite the live capture into the connected surface's buffers
+        /// (the graphics-context producer — the "camera" type in the wasi-surface
+        /// model). Host-fill: the camera CLAIMS the context but does not pump it
+        /// (claim-not-pump); pixels never cross. Placement / visibility / z are the
+        /// surface's contract, not the camera's. `none`-connected cameras simply do
+        /// not show a preview.
+        connect-preview: func(ctx: borrow<context>) -> result<_, camera-error>;
+
+        // ── controls (W3C Image Capture / MediaTrackCapabilities) — all no-ops where
+        // the device lacks the capability; additive room for focus/exposure/etc. ──
+
+        /// Torch / flash on/off.
+        set-torch: func(on: bool);
+        /// Zoom ratio (1.0 = none); clamped to the device's supported range.
+        set-zoom: func(ratio: f32);
+    }
+}
+
+world camera-guest {
+    import camera;
+}

@@ -32,8 +32,10 @@ wasi:graphics-context — THE SOCKET: get-current-buffer / present
       ├─ frame-buffer device  guest raw pixels           (upstream)
       ├─ canvas               guest 2D semantics,        (wasi:canvas —
       │                       host rasterizes              the third type)
-      └─ video decoder        host codec fills buffers   (wandr:video —
-                                the "media element", fourth type)
+      ├─ video decoder        host codec fills buffers   (wasi:video-decoder
+      │                         the "media element",       — the fourth type)
+      └─ camera viewfinder    host capture fills buffers (wasi:camera —
+                                the fifth type)
 ```
 
 The web platform ships exactly this shape (one canvas/surface; 2D,
@@ -113,7 +115,7 @@ interface surface-events {
 | webgpu / frame-buffer | upstream's `device.connect-graphics-context(borrow<context>)` + `buffer.from-graphics-buffer(abstract-buffer)` — referenced, not redesigned here | upstream, pre-stable |
 | **canvas** (third type) | DRAFTED: `wasi:canvas@0.0.2/connection` (`proposals/wasi-canvas/wit/connection.wit`, validated) — `canvas-device.connect(ctx)` + `from-graphics-buffer`; NOT in the canvas-host world yet. The fused `embedding.canvas-context` stays the reactor form (documented equivalence) | both forms now artifacts; un-fused wires at the trigger |
 | **video decoder** (fourth type) | DRAFTED: `proposals/wasi-video-decoder/` — decoder + `connect(ctx)`; placement/visibility/z moved to surface vocabulary; CVO `set-rotation` kept (frame property, not placement) | draft validated 2026-06-12; fused wandr:video keeps shipping side-by-side until the wiring trigger |
-| **camera preview** (fifth type) | DRAFTED: `proposals/wasi-video-encoder/` — the viewfinder as `encoder.connect-preview(ctx)`; the shipped fused form's preview-rect/visible/layer move to surface vocabulary. The encoder ITSELF is not surface-related (compressed bytes to the guest); only its viewfinder composites. A standalone wasi:camera (source factored from encoder) is the named future lane | draft validated 2026-06-12; fused wandr:video ships on |
+| **camera viewfinder** (fifth type) | DRAFTED: `proposals/wasi-camera/` — the viewfinder as `camera.connect-preview(ctx)`; the shipped fused form's preview-rect/visible/layer move to surface vocabulary. The viewfinder is the CAMERA's, not the encoder's (the encoder is pure codec: compressed bytes to the guest). wasi:camera is the source factored out of the encoder (W3C precedent: Media Capture and Streams vs WebCodecs) | draft validated 2026-08-05; fused wandr:video ships on |
 
 ### Pull vs fill: how a host-fill producer uses the socket
 
