@@ -134,6 +134,7 @@ interface frame-pacing {
 world ui-shell-imports {
     import metrics;
     import theme;
+    import shell-control;
     import locale;
     import clipboard;
     import ime;
