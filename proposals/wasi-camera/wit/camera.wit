@@ -36,6 +36,9 @@ interface types {
     /// Which way the camera points. = MediaTrackConstraints `facingMode`
     /// (user/environment) + `external` for a plugged-in webcam. `open(facing, …)`
     /// picks the nearest device; the granted device's facing is reported back.
+    /// Discriminants are ABI-positional and stable — front=0, back=1, external=2;
+    /// APPEND only. Omits facingMode's rare `left`/`right` (dual-camera stereo rigs);
+    /// add by appending if a consumer needs them.
     enum facing { front, back, external }
 
     /// A camera the host can offer right now (PROBED, not declared — an unplugged or
@@ -58,6 +61,25 @@ interface types {
         framerate: u32,
     }
 
+    /// What an OPEN camera can do (= W3C `getCapabilities` — the third of the
+    /// constrainable triad, alongside the `format`/`facing` REQUEST and the granted
+    /// `format()`/`facing()` SETTINGS). Post-open, so it is privacy-clean. Without it a
+    /// guest can't tell "no torch" from "torch failed", bound a zoom slider, or offer a
+    /// resolution picker — `set-torch`/`set-zoom` are otherwise silent no-ops.
+    record camera-capabilities {
+        /// true if the device has a controllable torch/flash; else `set-torch` is a
+        /// no-op and the UI should hide the button.
+        has-torch: bool,
+        /// Maximum `set-zoom` ratio (min is 1.0); 1.0 = zoom unsupported. Bound a zoom
+        /// slider to this.
+        max-zoom: f32,
+        /// Capture modes the sensor supports, for a resolution/framerate picker. `open`
+        /// already nearest-matches, so a call/viewfinder that doesn't pick can ignore it.
+        formats: list<format>,
+    }
+
+    /// Discriminants are ABI-positional and stable (no-camera=0 … device-lost=4);
+    /// APPEND only.
     enum camera-error {
         /// No camera matches (facing/device absent, or none present at all).
         no-camera,
@@ -74,7 +96,7 @@ interface types {
 }
 
 interface camera {
-    use types.{facing, camera-info, format, camera-error};
+    use types.{facing, camera-info, format, camera-capabilities, camera-error};
     use wasi:video-codec/types@0.0.1.{frame};
     use wasi:graphics-context/graphics-context@0.0.2.{context};
 
@@ -89,41 +111,58 @@ interface camera {
     // `read-rgba`'d for the pixels-needed path. `frame.rotation` carries the facing-
     // adjusted sensor CVO (the encoder's old `display-rotation`, now a source property).
 
-    /// An open capture device. One owner; dropping it releases the camera (the
-    /// cameraserver-wedge rule — ordered teardown is the host's).
-    resource camera {
+    /// An open capture session on one device. One owner; dropping it releases the
+    /// device (ordered teardown is the host's — the cameraserver-wedge rule).
+    resource session {
         /// Open the nearest camera for `facing` at a requested format. `permission-
         /// denied` if the host refuses. The granted format may differ — query it.
         open: static func(facing: facing, want: format)
-              -> result<camera, camera-error>;
+              -> result<session, camera-error>;
         /// Open a specific enumerated device (`camera-info.device-id`).
         open-device: static func(device-id: string, want: format)
-              -> result<camera, camera-error>;
+              -> result<session, camera-error>;
 
-        /// The format actually granted (may differ from the request).
+        /// The format actually granted (may differ from the request) — W3C getSettings.
         format: func() -> format;
         /// The facing actually granted.
         facing: func() -> facing;
+        /// What this device CAN do — torch presence, zoom range, supported modes (W3C
+        /// getCapabilities). Post-open; drives the controls UI + a resolution picker.
+        capabilities: func() -> camera-capabilities;
 
-        /// Pull the next captured frame (non-blocking; `none` = not ready yet). Pace
-        /// against the embedder's frame cadence rather than spinning. The frame is
-        /// opaque + host-held — see `frame`.
+        /// Pull the next captured frame (non-blocking; `none` = not ready yet). The
+        /// frame is opaque + host-held — see `frame`.
+        ///
+        /// POLL, not pollable: `option` suits the frame-paced reactor model (the
+        /// embedder's on-frame tick is the wakeup). A `wasi:io/poll` pollable for a
+        /// self-scheduling PULL-profile guest that wants to block on capture is a
+        /// deliberate additive deferral — the same push/pull split as wasi:surface and
+        /// wasi:video-codec's `next-decoded`.
         next-frame: func() -> option<frame>;
 
+        /// Pause (false) / resume (true) frame delivery WITHOUT releasing the device —
+        /// the call "video mute". Keeps the sensor warm and the exclusive lock held, so
+        /// resume is instant (no re-permission, re-acquire, or auto-exposure/focus
+        /// warm-up) and there's no `in-use` race. Dropping the session is the full
+        /// release; this is the cheap toggle. (A mid-call front↔back flip is a warm
+        /// reopen, which this makes viable.)
+        set-active: func(on: bool);
+
         /// VIEWFINDER: composite the live capture into the connected surface's buffers
-        /// (the graphics-context producer — the "camera" type in the wasi-surface
-        /// model). Host-fill: the camera CLAIMS the context but does not pump it
+        /// (the graphics-context producer — the camera type in the wasi-surface model).
+        /// Host-fill: the session CLAIMS the context but does not pump it
         /// (claim-not-pump); pixels never cross. Placement / visibility / z are the
-        /// surface's contract, not the camera's. `none`-connected cameras simply do
-        /// not show a preview.
+        /// surface's contract, not the camera's. `none`-connected sessions show no
+        /// preview.
         connect-preview: func(ctx: borrow<context>) -> result<_, camera-error>;
 
-        // ── controls (W3C Image Capture / MediaTrackCapabilities) — all no-ops where
-        // the device lacks the capability; additive room for focus/exposure/etc. ──
+        // ── controls (W3C Image Capture / MediaTrackCapabilities) — no-ops where the
+        // device lacks the capability (query `capabilities` first); additive room for
+        // focus/exposure/etc. ──
 
-        /// Torch / flash on/off.
+        /// Torch / flash on/off (no-op if `capabilities.has-torch` is false).
         set-torch: func(on: bool);
-        /// Zoom ratio (1.0 = none); clamped to the device's supported range.
+        /// Zoom ratio (1.0 = none); clamped to `[1.0, capabilities.max-zoom]`.
         set-zoom: func(ratio: f32);
     }
 }
