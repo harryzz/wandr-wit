@@ -115,6 +115,28 @@ interface surface-events {
 | **video decoder** (fourth type) | DRAFTED: `proposals/wasi-video-decoder/` — decoder + `connect(ctx)`; placement/visibility/z moved to surface vocabulary; CVO `set-rotation` kept (frame property, not placement) | draft validated 2026-06-12; fused wandr:video keeps shipping side-by-side until the wiring trigger |
 | **camera preview** (fifth type) | DRAFTED: `proposals/wasi-video-encoder/` — the viewfinder as `encoder.connect-preview(ctx)`; the shipped fused form's preview-rect/visible/layer move to surface vocabulary. The encoder ITSELF is not surface-related (compressed bytes to the guest); only its viewfinder composites. A standalone wasi:camera (source factored from encoder) is the named future lane | draft validated 2026-06-12; fused wandr:video ships on |
 
+### Pull vs fill: how a host-fill producer uses the socket
+
+Two producer classes exercise the `context` socket differently, and the model's
+"differ only in who fills the buffer" line already covers it — but make it explicit so
+the socket's verbs aren't misread as a per-producer gap:
+
+- **Guest-pull producers** (webgpu, frame-buffer, canvas) PUMP the context: each frame
+  they `get-current-buffer()` → render into it → `present()`. The pull verbs ARE their
+  render loop.
+- **Host-fill producers** (the video decoder, the camera viewfinder) CLAIM the context
+  via `connect(ctx)` but do NOT pump it — the host fills and presents internally. The
+  video decoder's PLAYBACK lane drives timing via `decoded-frame.present(at-ns)` on the
+  wasi:clocks monotonic timeline (the RTP lane presents as frames arrive); either way
+  `context.get-current-buffer`/`present` go unused for these producers. That is claim-
+  not-pump, and it is coherent: the socket names WHERE the buffers go, not WHO clocks
+  them.
+- **Normative ordering — connect before submit.** A host-fill producer must `connect`
+  its surface's context before the first `submit`/`submit-timed`; frames submitted
+  before a connect MAY be dropped (there is nowhere for the output to land yet). This
+  promotes the video-decoder draft's `MAY`-worded note to a socket-level rule so every
+  fill producer states the same contract.
+
 ## Event-profile tie-in (no new vocabulary)
 
 The push profile already exists: `wasi:input-handlers@0.0.2` —
