@@ -1,16 +1,17 @@
 // wasi:camera — DRAFT (wandr). NOT WIRED.
 //
-// The camera SOURCE, factored out of wasi:video-encoder. The web platform already
-// draws this line — capture and codec are SEPARATE specs — and wandr mirrors it:
-//   * wasi:camera         == W3C **Media Capture and Streams** (getUserMedia /
-//                            MediaStreamTrack; `facing` == `facingMode`) + **Image
-//                            Capture** (torch/zoom/still) [W3C WebRTC WG].
-//   * wasi:video-encoder  == WebCodecs **VideoEncoder** (codec; camera-agnostic).
-//   * the bridge          == W3C **MediaStreamTrack Insertable Streams**
-//                            (`MediaStreamTrackProcessor` -> VideoFrame): a camera
-//                            `frame` is the opaque currency an encoder consumes.
+// The camera SOURCE, factored out of the codec. The web platform already draws this
+// line — capture and codec are SEPARATE specs — and wandr mirrors it:
+//   * wasi:camera       == W3C **Media Capture and Streams** (getUserMedia /
+//                          MediaStreamTrack; `facing` == `facingMode`) + **Image
+//                          Capture** (torch/zoom/still) [W3C WebRTC WG].
+//   * wasi:video-codec  == WebCodecs **VideoDecoder/VideoEncoder + VideoFrame**
+//                          (codec; source-agnostic; holds the shared `frame`).
+//   * the bridge        == W3C **MediaStreamTrack Insertable Streams**
+//                          (`MediaStreamTrackProcessor` -> VideoFrame): a camera
+//                          `frame` is the opaque currency the encoder consumes.
 // So the web pipeline getUserMedia -> track-processor -> VideoEncoder is exactly
-// wasi:camera -> wasi:video-encoder here. No wasi:camera proposal exists upstream at
+// wasi:camera -> wasi:video-codec here. No wasi:camera proposal exists upstream at
 // any phase — this is a greenfield draft derived from the W3C family (the
 // wasi:canvas / wasi:audio playbook).
 //
@@ -26,9 +27,9 @@
 // SURFACE's contract. The camera device ITSELF is not surface-related; only its
 // preview is.
 //
-// A `frame` shared with wasi:video-decoder's `decoded-frame` (both are opaque
-// host-held VideoFrames) is a candidate to hoist into a common wasi:media-types /
-// wasi:video-frame package later; kept local here until a second consumer needs it.
+// The `frame` is the SHARED wasi:video-codec VideoFrame (that package holds the codec
+// AND the frame, parallel to wasi:audio-codec): the camera PRODUCES it, the encoder
+// CONSUMES it. Distinct from the codec's `decoded-frame`, which adds display scheduling.
 package wasi:camera@0.0.1;
 
 interface types {
@@ -74,7 +75,7 @@ interface types {
 
 interface camera {
     use types.{facing, camera-info, format, camera-error};
-    use wasi:video-frame/types@0.0.1.{frame};
+    use wasi:video-codec/types@0.0.1.{frame};
     use wasi:graphics-context/graphics-context@0.0.2.{context};
 
     /// Cameras available to THIS guest right now (= MediaDevices.enumerateDevices
@@ -83,7 +84,7 @@ interface camera {
     /// (the getUserMedia privacy rule); the host decides.
     list-cameras: func() -> list<camera-info>;
 
-    // Captured frames are the SHARED wasi:video-frame `frame` (= WebCodecs VideoFrame):
+    // Captured frames are the SHARED wasi:video-codec `frame` (= WebCodecs VideoFrame):
     // opaque + host-held, forwarded zero-copy to a video-encoder or the viewfinder, or
     // `read-rgba`'d for the pixels-needed path. `frame.rotation` carries the facing-
     // adjusted sensor CVO (the encoder's old `display-rotation`, now a source property).

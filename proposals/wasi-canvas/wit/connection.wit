@@ -2,7 +2,7 @@ package wasi:canvas@0.0.2;
 
 /// OPTIONAL — the UN-FUSED form of the embedding handoff: wasi:canvas as
 /// the THIRD pluggable graphics-context type (beside webgpu and
-/// frame-buffer; video is the fourth — proposals/wasi-video-decoder).
+/// frame-buffer; video is the fourth — proposals/wasi-video-codec).
 /// Mirrors upstream's frame-buffer idiom (device.connect +
 /// from-graphics-buffer). NOT in the canvas-host world yet: reactor
 /// guests keep the fused `embedding.canvas-context`

@@ -2,7 +2,7 @@
 //
 // The OPTIONAL hardware codec lane of the audio stack. Mirrors the W3C
 // **WebCodecs** `AudioDecoder` / `AudioEncoder` (EncodedAudioChunk ↔ AudioData,
-// isConfigSupported), the audio sibling of the in-tree `wasi:video-decoder`.
+// isConfigSupported), the audio sibling of the in-tree `wasi:video-codec`.
 //
 // WHY OPTIONAL (the design's capability-negotiation rule — see
 // docs/audio-player-design.md): audio decode is cheap, so the DEFAULT is the
@@ -14,7 +14,7 @@
 // "Use the HW if present, write my own when absent" is one match on the open
 // result. A minimal host (or a PipeWire/CoreAudio/WASAPI host with no HW
 // codec) advertises `unsupported` and the guest's Rust fallback carries it —
-// so the contract stays OS-agnostic. Reuses the `wasi:video-decoder` error
+// so the contract stays OS-agnostic. Reuses the `wasi:video-codec` error
 // vocabulary so fallback is uniform across media.
 //
 // TWO OUTPUT TOPOLOGIES (the design's transcode-vs-tunnel decision):
@@ -40,7 +40,7 @@ interface types {
     enum codec { opus, aac, mp3, flac, vorbis, pcm-mulaw, pcm-alaw }
 
     /// WebCodecs `hardwareAcceleration` preference. SHARED VOCABULARY with
-    /// wasi:video-decoder, kept IDENTICAL so a guest's HW/SW fallback is uniform
+    /// wasi:video-codec, kept IDENTICAL so a guest's HW/SW fallback is uniform
     /// across the A/V pair (candidate to hoist into a common wasi:media-types).
     /// `require-hardware` is rarely needed for audio — software audio decode is cheap,
     /// where software video decode costs real CPU at frame rate — but it stays in the
@@ -52,7 +52,7 @@ interface types {
     /// lane so the guest can choose rather than have the host hide it).
     enum support { hardware, software, unsupported }
 
-    /// Same vocabulary as wasi:video-decoder so guest fallback is uniform.
+    /// Same vocabulary as wasi:video-codec so guest fallback is uniform.
     enum codec-error {
         unsupported-codec,
         no-hw-codec,
