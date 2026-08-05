@@ -114,12 +114,23 @@ interface types {
     /// software. `require-hardware` is the honest opt-out for a caller that would
     /// rather fail than silently pay CPU it cannot afford, and it is the ONLY value
     /// that can turn a working decode into an error.
+    ///
+    /// SHARED VOCABULARY with wasi:audio-codec (kept identical so a guest's HW/SW
+    /// fallback logic is uniform across the A/V pair; candidate to hoist into a common
+    /// wasi:media-types package). `require-hardware` matters more here than for audio
+    /// — software VIDEO decode costs real CPU at frame rate, where software audio
+    /// decode is cheap — but the vocabulary stays the same on both.
     enum acceleration {
         no-preference,
         prefer-hardware,
         prefer-software,
         require-hardware,
     }
+
+    /// `probe` result (= WebCodecs `isConfigSupported`, but explicit about the LANE
+    /// so the guest can choose rather than have the host hide it). Shared vocabulary
+    /// with wasi:audio-codec's `support`.
+    enum support { hardware, software, unsupported }
 
     /// A sub-rectangle of the connected surface, in SURFACE pixels (the same
     /// coordinate space the guest draws its UI in). Used only as the RESULT of
@@ -147,7 +158,7 @@ interface types {
 
 interface decoder {
     use types.{codec, decoder-config, encoded-frame, timed-frame, acceleration,
-               decoder-info, content-rect, video-error};
+               support, decoder-info, content-rect, video-error};
     use wasi:graphics-context/graphics-context@0.0.2.{context};
     use wasi:eme/eme@0.0.1.{key-session};  // ENCRYPTED MEDIA: the bound keys
 
@@ -159,10 +170,21 @@ interface decoder {
     /// answer a guest can act on. WHY A GUEST NEEDS THIS: to choose a stream it can
     /// play before committing to a download, and to tell the user why playback will
     /// be expensive. It does NOT let the guest pin an implementation — see
-    /// `open-accelerated`. (NOTES: a per-config `probe(config) -> support`, matching
-    /// WebCodecs `isConfigSupported` and the wasi:audio-codec sibling, is under
-    /// consideration alongside this enumeration form.)
+    /// `open-accelerated`.
+    ///
+    /// ENUMERATE-ALL vs PROBE-ONE: this lists the WHOLE decoder table (the
+    /// `navigator.mediaCapabilities` / diagnostics role); `probe(config)` below
+    /// answers "can I play THIS config, and on which lane" (the WebCodecs
+    /// `isConfigSupported` role). A guest committing to one stream wants `probe`; a
+    /// UI showing "what this device supports" wants `list-decoders`.
     list-decoders: func() -> list<decoder-info>;
+
+    /// Can this host decode `config`, and on which lane? (= WebCodecs
+    /// `AudioDecoder/VideoDecoder.isConfigSupported`, the faithful per-config probe;
+    /// `support` is explicit about hardware vs software so the guest chooses its
+    /// fallback rather than having the host hide it.) Shared shape with the
+    /// wasi:audio-codec sibling so A/V capability checks are uniform.
+    probe: func(config: decoder-config) -> support;
 
     /// A frame the host has decoded and still holds (PLAYBACK lane).
     ///

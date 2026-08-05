@@ -39,8 +39,14 @@ interface types {
     /// guest-side, as with the Symphonia feature flags).
     enum codec { opus, aac, mp3, flac, vorbis, pcm-mulaw, pcm-alaw }
 
-    /// WebCodecs `hardwareAcceleration` preference.
-    enum acceleration { no-preference, prefer-hardware, prefer-software }
+    /// WebCodecs `hardwareAcceleration` preference. SHARED VOCABULARY with
+    /// wasi:video-decoder, kept IDENTICAL so a guest's HW/SW fallback is uniform
+    /// across the A/V pair (candidate to hoist into a common wasi:media-types).
+    /// `require-hardware` is rarely needed for audio — software audio decode is cheap,
+    /// where software video decode costs real CPU at frame rate — but it stays in the
+    /// enum so the two siblings match exactly; a guest that doesn't need it never
+    /// passes it. (Appended last: discriminants no-preference=0…require-hardware=3.)
+    enum acceleration { no-preference, prefer-hardware, prefer-software, require-hardware }
 
     /// `probe` result (= WebCodecs isConfigSupported, but explicit about the
     /// lane so the guest can choose rather than have the host hide it).
